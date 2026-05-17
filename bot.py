@@ -12,11 +12,10 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
-    ContextTypes, CallbackQueryHandler, PollAnswerHandler
+    ContextTypes, CallbackQueryHandler, ChatMemberHandler
 )
 from telegram.constants import ParseMode
 from google import genai
-from google.genai import types
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -52,7 +51,7 @@ for _id in ADMIN_IDS_RAW.split(","):
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ─────────────────────────────────────────────
-# PERSISTENCE HELPERS
+# PERSISTENCE
 # ─────────────────────────────────────────────
 
 def load_json(path: str, default):
@@ -75,9 +74,6 @@ sessions: dict = load_json(SESSION_FILE, {})
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-
-def is_approved(chat_id: int) -> bool:
-    return str(chat_id) in approved_chats
 
 def save_approved():
     save_json(APPROVED_CHATS_FILE, approved_chats)
@@ -104,24 +100,17 @@ async def gemini_ask(prompt: str) -> str:
 async def guard(update: Update) -> bool:
     chat = update.effective_chat
     user = update.effective_user
-
     if chat.type == "private":
-        if is_admin(user.id):
-            return True
-        return False
-
-    if not is_approved(chat.id):
-        return False
-
-    return True
+        return is_admin(user.id)
+    return str(chat.id) in approved_chats and approved_chats[str(chat.id)].get("approved")
 
 # ─────────────────────────────────────────────
-# BOT ADDED TO A NEW CHAT
+# CHAT MEMBER HANDLER
 # ─────────────────────────────────────────────
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.my_chat_member
-    chat   = result.chat
+    chat = result.chat
     new_status = result.new_chat_member.status
 
     if new_status in ("member", "administrator"):
@@ -139,12 +128,12 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=(
-                        f"🔔 *Bot naye chat me add hua!*\n\n"
-                        f"📛 *Naam:* {chat.title or chat.username}\n"
+                        f"🔔 *Bot Added to New Chat!*\n\n"
+                        f"📛 *Name:* {chat.title or chat.username}\n"
                         f"🆔 *Chat ID:* `{chat.id}`\n"
                         f"📂 *Type:* {chat.type}\n\n"
-                        f"Approve karne ke liye:\n`/algo-approve {chat.id}`\n"
-                        f"Reject karne ke liye:\n`/algo-reject {chat.id}`"
+                        f"To approve: `/algo_approve {chat.id}`\n"
+                        f"To reject: `/algo_reject {chat.id}`"
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -164,65 +153,62 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
-    user = update.effective_user
-    if is_admin(user.id):
-        await update.message.reply_text(
-            "👋 *ALGO-BOT Active Hai!*\n\n"
-            "📚 Govt Exam Preparation Bot — Powered by Gemini AI\n\n"
-            "*Admin Commands:*\n"
-            "`/algo-post` — Study material post karo\n"
-            "`/algo-quizzes` — Quiz session shuru karo\n"
-            "`/algo-list` — Approved chats ki list\n"
-            "`/algo-approve <chat_id>` — Chat approve karo\n"
-            "`/algo-reject <chat_id>` — Chat reject karo\n"
-            "`/algo-stop` — Chalu session band karo\n"
-            "`/algo-status` — Bot ka status dekho",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    await update.message.reply_text(
+        "👋 *ALGO-BOT is Active!*\n\n"
+        "📚 Govt Exam Preparation Bot — Powered by Gemini AI\n\n"
+        "*Admin Commands:*\n"
+        "`/algo_post` — Post study material\n"
+        "`/algo_quizzes` — Start a quiz session\n"
+        "`/algo_list` — List all approved chats\n"
+        "`/algo_approve <chat_id>` — Approve a chat\n"
+        "`/algo_reject <chat_id>` — Reject a chat\n"
+        "`/algo_stop` — Stop all running sessions\n"
+        "`/algo_status` — View bot status",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 # ─────────────────────────────────────────────
-# /algo-approve  /algo-reject
+# /algo_approve  /algo_reject
 # ─────────────────────────────────────────────
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Usage: `/algo-approve <chat_id>`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Usage: `/algo_approve <chat_id>`", parse_mode=ParseMode.MARKDOWN)
         return
     chat_id = context.args[0].strip()
     if chat_id in approved_chats:
         approved_chats[chat_id]["approved"] = True
         save_approved()
-        await update.message.reply_text(f"✅ Chat `{chat_id}` approve ho gaya!", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"✅ Chat `{chat_id}` has been approved!", parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(f"⚠️ Chat `{chat_id}` list me nahi hai.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"⚠️ Chat `{chat_id}` not found in list.", parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Usage: `/algo-reject <chat_id>`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Usage: `/algo_reject <chat_id>`", parse_mode=ParseMode.MARKDOWN)
         return
     chat_id = context.args[0].strip()
     if chat_id in approved_chats:
         approved_chats.pop(chat_id)
         save_approved()
-        await update.message.reply_text(f"🗑️ Chat `{chat_id}` reject & remove ho gaya!", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"🗑️ Chat `{chat_id}` has been rejected and removed!", parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(f"⚠️ Chat `{chat_id}` list me nahi hai.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"⚠️ Chat `{chat_id}` not found in list.", parse_mode=ParseMode.MARKDOWN)
 
 # ─────────────────────────────────────────────
-# /algo-list
+# /algo_list
 # ─────────────────────────────────────────────
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not approved_chats:
-        await update.message.reply_text("📭 Abhi koi chat registered nahi hai.")
+        await update.message.reply_text("📭 No chats registered yet.")
         return
-
     lines = ["📋 *Registered Chats List:*\n"]
     for idx, (cid, info) in enumerate(approved_chats.items(), 1):
         status = "✅ Approved" if info.get("approved") else "⏳ Pending Approval"
@@ -236,14 +222,14 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 # ─────────────────────────────────────────────
-# /algo-status
+# /algo_status
 # ─────────────────────────────────────────────
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-    approved_count = sum(1 for v in approved_chats.values() if v.get("approved"))
-    pending_count  = len(approved_chats) - approved_count
+    approved_count  = sum(1 for v in approved_chats.values() if v.get("approved"))
+    pending_count   = len(approved_chats) - approved_count
     active_sessions = sum(1 for s in sessions.values() if s.get("running"))
     await update.message.reply_text(
         f"📊 *ALGO-BOT Status*\n\n"
@@ -255,7 +241,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ─────────────────────────────────────────────
-# /algo-stop
+# /algo_stop
 # ─────────────────────────────────────────────
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,10 +253,10 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sessions[cid]["running"] = False
             stopped += 1
     save_sessions()
-    await update.message.reply_text(f"🛑 {stopped} session(s) band kar diye gaye.")
+    await update.message.reply_text(f"🛑 {stopped} session(s) have been stopped.")
 
 # ─────────────────────────────────────────────
-# LISTS
+# DATA LISTS
 # ─────────────────────────────────────────────
 
 EXAMS = [
@@ -288,77 +274,73 @@ SUBJECTS_STUDY = [
 SUBJECTS_QUIZ = [
     "General Knowledge", "Current Affairs", "History", "Geography",
     "Polity", "Economy", "Science & Technology", "Maths / Reasoning",
-    "English", "Hindi", "Mixed (Sab)"
+    "English", "Hindi", "Mixed (All)"
 ]
 
 LEVELS = ["Beginner", "Intermediate", "Advanced"]
 
 # ─────────────────────────────────────────────
-# /algo-post
+# /algo_post
 # ─────────────────────────────────────────────
 
 async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     context.user_data["flow"] = "post"
-    context.user_data["step"] = "subject"
     context.user_data["target_chat"] = None
 
     approved_list = [(cid, info) for cid, info in approved_chats.items() if info.get("approved")]
     if not approved_list:
-        await update.message.reply_text("⚠️ Koi approved chat nahi hai. Pehle `/algo-approve <chat_id>` se approve karo.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(
+            "⚠️ No approved chats found. Use `/algo_approve <chat_id>` first.",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return
 
-    kb = []
-    for cid, info in approved_list:
-        kb.append([InlineKeyboardButton(
-            f"{info['type'].upper()}: {info['title'][:30]}",
-            callback_data=f"target|{cid}"
-        )])
-    kb.append([InlineKeyboardButton("📢 Sab Approved Chats Me Post Karo", callback_data="target|ALL")])
+    kb = [[InlineKeyboardButton(
+        f"{info['type'].upper()}: {info['title'][:30]}",
+        callback_data=f"target|{cid}"
+    )] for cid, info in approved_list]
+    kb.append([InlineKeyboardButton("📢 Post to All Approved Chats", callback_data="target|ALL")])
     await update.message.reply_text(
-        "📌 *Kis chat me post karna hai?*",
+        "📌 *Select target chat:*",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ─────────────────────────────────────────────
-# /algo-quizzes
+# /algo_quizzes
 # ─────────────────────────────────────────────
 
 async def cmd_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     context.user_data["flow"] = "quiz"
-    context.user_data["step"] = "subject"
     context.user_data["target_chat"] = None
 
     approved_list = [(cid, info) for cid, info in approved_chats.items() if info.get("approved")]
     if not approved_list:
-        await update.message.reply_text("⚠️ Koi approved chat nahi hai.", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("⚠️ No approved chats found.", parse_mode=ParseMode.MARKDOWN)
         return
 
-    kb = []
-    for cid, info in approved_list:
-        kb.append([InlineKeyboardButton(
-            f"{info['type'].upper()}: {info['title'][:30]}",
-            callback_data=f"target|{cid}"
-        )])
-    kb.append([InlineKeyboardButton("📢 Sab Approved Chats Me Quiz Bhejo", callback_data="target|ALL")])
+    kb = [[InlineKeyboardButton(
+        f"{info['type'].upper()}: {info['title'][:30]}",
+        callback_data=f"target|{cid}"
+    )] for cid, info in approved_list]
+    kb.append([InlineKeyboardButton("📢 Send Quiz to All Approved Chats", callback_data="target|ALL")])
     await update.message.reply_text(
-        "🧩 *Kis chat me quiz bhejni hai?*",
+        "🧩 *Select target chat for quiz:*",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ─────────────────────────────────────────────
-# CALLBACK QUERY HANDLER
+# CALLBACK HANDLER
 # ─────────────────────────────────────────────
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if not is_admin(query.from_user.id):
         return
 
@@ -366,51 +348,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     flow = context.user_data.get("flow")
 
     if data.startswith("target|"):
-        target = data.split("|", 1)[1]
-        context.user_data["target_chat"] = target
-        context.user_data["step"] = "subject"
-
+        context.user_data["target_chat"] = data.split("|", 1)[1]
         subjects = SUBJECTS_STUDY if flow == "post" else SUBJECTS_QUIZ
         kb = [[InlineKeyboardButton(s, callback_data=f"subject|{s}")] for s in subjects]
-        label = "📚 Study Material" if flow == "post" else "🧩 Quiz"
+        label = "Study Material" if flow == "post" else "Quiz"
         await query.edit_message_text(
-            f"*{label}* — Konsa subject?\n\nEk subject chuniye:",
+            f"📚 *{label}* — Select a subject:",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
-        return
 
-    if data.startswith("subject|"):
-        subject = data.split("|", 1)[1]
-        context.user_data["subject"] = subject
-        context.user_data["step"] = "exam"
-
+    elif data.startswith("subject|"):
+        context.user_data["subject"] = data.split("|", 1)[1]
         kb = [[InlineKeyboardButton(e, callback_data=f"exam|{e}")] for e in EXAMS]
         await query.edit_message_text(
-            f"✅ Subject: *{subject}*\n\n🎯 Konse exam ke liye?",
+            f"✅ Subject: *{context.user_data['subject']}*\n\n🎯 Select exam:",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
-        return
 
-    if data.startswith("exam|"):
-        exam = data.split("|", 1)[1]
-        context.user_data["exam"] = exam
-        context.user_data["step"] = "level"
-
+    elif data.startswith("exam|"):
+        context.user_data["exam"] = data.split("|", 1)[1]
         kb = [[InlineKeyboardButton(l, callback_data=f"level|{l}")] for l in LEVELS]
         await query.edit_message_text(
-            f"✅ Exam: *{exam}*\n\n📊 Difficulty level kya ho?",
+            f"✅ Exam: *{context.user_data['exam']}*\n\n📊 Select difficulty level:",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
-        return
 
-    if data.startswith("level|"):
-        level = data.split("|", 1)[1]
-        context.user_data["level"] = level
-        context.user_data["step"] = "count"
-
+    elif data.startswith("level|"):
+        context.user_data["level"] = data.split("|", 1)[1]
         if flow == "post":
             kb = [
                 [InlineKeyboardButton("5 Posts", callback_data="count|5"),
@@ -419,7 +386,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("20 Posts", callback_data="count|20")],
             ]
             await query.edit_message_text(
-                f"✅ Level: *{level}*\n\n📝 Kitne study material posts bhejne hain?",
+                f"✅ Level: *{context.user_data['level']}*\n\n📝 How many posts to send?",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -433,43 +400,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("200 Quizzes", callback_data="count|200")],
             ]
             await query.edit_message_text(
-                f"✅ Level: *{level}*\n\n🧩 Kitne quizzes bhejne hain? (30 sec interval)",
+                f"✅ Level: *{context.user_data['level']}*\n\n🧩 How many quizzes? (30 sec interval each)",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode=ParseMode.MARKDOWN
             )
-        return
 
-    if data.startswith("count|"):
-        count = int(data.split("|", 1)[1])
-        context.user_data["count"] = count
-
+    elif data.startswith("count|"):
+        context.user_data["count"] = int(data.split("|", 1)[1])
         subject = context.user_data["subject"]
         exam    = context.user_data["exam"]
         level   = context.user_data["level"]
+        count   = context.user_data["count"]
         target  = context.user_data["target_chat"]
-
+        mode_label = "Study Material Posts" if flow == "post" else "Quizzes"
         kb = [
-            [InlineKeyboardButton("✅ Haan, Shuru Karo!", callback_data="confirm|yes")],
+            [InlineKeyboardButton("✅ Yes, Start!", callback_data="confirm|yes")],
             [InlineKeyboardButton("❌ Cancel", callback_data="confirm|no")],
         ]
-        mode_label = "Study Material Posts" if flow == "post" else "Quizzes"
         await query.edit_message_text(
-            f"📋 *Confirm karo:*\n\n"
+            f"📋 *Confirm Session:*\n\n"
             f"📚 Subject: *{subject}*\n"
             f"🎯 Exam: *{exam}*\n"
             f"📊 Level: *{level}*\n"
             f"🔢 Count: *{count} {mode_label}*\n"
-            f"📢 Target: *{'Sab Chats' if target == 'ALL' else target}*\n\n"
-            f"Kya aap shuru karna chahte hain?",
+            f"📢 Target: *{'All Approved Chats' if target == 'ALL' else target}*\n\n"
+            f"Ready to start?",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
-        return
 
-    if data.startswith("confirm|"):
-        choice = data.split("|", 1)[1]
-        if choice == "no":
-            await query.edit_message_text("❌ Session cancel ho gaya.")
+    elif data.startswith("confirm|"):
+        if data.split("|", 1)[1] == "no":
+            await query.edit_message_text("❌ Session cancelled.")
             context.user_data.clear()
             return
 
@@ -481,21 +443,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target  = context.user_data["target_chat"]
 
         await query.edit_message_text(
-            f"🚀 *Session shuru ho raha hai!*\n"
+            f"🚀 *Session Started!*\n"
             f"📚 {subject} | 🎯 {exam} | 📊 {level} | 🔢 {count}",
             parse_mode=ParseMode.MARKDOWN
         )
 
-        if target == "ALL":
-            target_chats = [cid for cid, info in approved_chats.items() if info.get("approved")]
-        else:
-            target_chats = [target]
+        target_chats = (
+            [cid for cid, info in approved_chats.items() if info.get("approved")]
+            if target == "ALL" else [target]
+        )
 
         for cid in target_chats:
             sessions[cid] = {
                 "mode": flow, "subject": subject, "exam": exam,
-                "level": level, "count": count, "running": True,
-                "done": 0
+                "level": level, "count": count, "running": True, "done": 0
             }
         save_sessions()
 
@@ -506,14 +467,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(run_quiz_session(context, int(cid), subject, exam, level, count))
 
         context.user_data.clear()
-        return
 
 # ─────────────────────────────────────────────
 # STUDY MATERIAL SESSION
 # ─────────────────────────────────────────────
 
 async def run_study_session(context, chat_id: int, subject: str, exam: str, level: str, total: int):
-    logger.info(f"Study session started: chat={chat_id} subject={subject} exam={exam} level={level} count={total}")
+    logger.info(f"Study session started | chat={chat_id} | subject={subject} | exam={exam} | level={level} | total={total}")
     batch_size = 5
     posted = 0
     batch_num = 0
@@ -521,9 +481,7 @@ async def run_study_session(context, chat_id: int, subject: str, exam: str, leve
     while posted < total:
         if not sessions.get(str(chat_id), {}).get("running"):
             break
-
-        remaining = total - posted
-        this_batch = min(batch_size, remaining)
+        this_batch = min(batch_size, total - posted)
         batch_num += 1
 
         prompt = f"""
@@ -536,9 +494,9 @@ Batch: {batch_num}
 
 Rules:
 - Each post must be unique and educational
-- Use simple Hindi-English mix (Hinglish) that students understand
-- Format each post with emoji headings, bullet points, key points
-- Include: Topic name, Key concepts, Important facts, Memory tricks (where applicable)
+- Write in clear English with simple language
+- Format each post with emoji headings and bullet points
+- Include: Topic name, Key concepts, Important facts, Memory tricks where applicable
 - End each post with "💡 Pro Tip:" related to the topic
 - Separate each post with exactly: ---NEXT---
 
@@ -572,18 +530,21 @@ Generate {this_batch} posts now:
                 save_sessions()
                 await asyncio.sleep(3)
             except Exception as e:
-                logger.error(f"Post send error (chat={chat_id}): {e}")
+                logger.error(f"Post send error | chat={chat_id} | error={e}")
                 await asyncio.sleep(5)
 
     sessions[str(chat_id)]["running"] = False
     save_sessions()
-    logger.info(f"Study session done: chat={chat_id} posted={posted}")
+    logger.info(f"Study session complete | chat={chat_id} | posted={posted}/{total}")
 
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
                 admin_id,
-                f"✅ Study session complete!\n📢 Chat: `{chat_id}`\n📝 Posted: {posted}/{total}",
+                f"✅ *Study Session Complete!*\n\n"
+                f"📢 Chat: `{chat_id}`\n"
+                f"📝 Posted: {posted}/{total}\n"
+                f"📚 Subject: {subject} | 🎯 {exam}",
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception:
@@ -594,7 +555,7 @@ Generate {this_batch} posts now:
 # ─────────────────────────────────────────────
 
 async def run_quiz_session(context, chat_id: int, subject: str, exam: str, level: str, total: int):
-    logger.info(f"Quiz session started: chat={chat_id} subject={subject} exam={exam} level={level} count={total}")
+    logger.info(f"Quiz session started | chat={chat_id} | subject={subject} | exam={exam} | level={level} | total={total}")
     batch_size = 10
     sent = 0
     batch_num = 0
@@ -602,9 +563,7 @@ async def run_quiz_session(context, chat_id: int, subject: str, exam: str, level
     while sent < total:
         if not sessions.get(str(chat_id), {}).get("running"):
             break
-
-        remaining = total - sent
-        this_batch = min(batch_size, remaining)
+        this_batch = min(batch_size, total - sent)
         batch_num += 1
 
         prompt = f"""
@@ -615,18 +574,18 @@ Exam: {exam}
 Difficulty: {level}
 Batch: {batch_num}
 
-STRICT FORMAT — Return ONLY valid JSON array, no other text:
+Return ONLY a valid JSON array, no extra text, no markdown fences:
 [
   {{
     "question": "Question text here?",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "correct": 0,
-    "explanation": "Brief explanation why this answer is correct"
+    "explanation": "Brief explanation of the correct answer"
   }}
 ]
 
-correct = index of correct option (0-3)
-Generate exactly {this_batch} questions now in JSON format:
+correct = index of correct option (0 to 3)
+Generate exactly {this_batch} questions:
 """
         raw = await gemini_ask(prompt)
         if not raw:
@@ -637,7 +596,7 @@ Generate exactly {this_batch} questions now in JSON format:
             clean = re.sub(r"```json|```", "", raw).strip()
             questions = json.loads(clean)
         except Exception as e:
-            logger.error(f"Quiz JSON parse error: {e}\nRaw: {raw[:200]}")
+            logger.error(f"Quiz JSON parse error | chat={chat_id} | error={e}")
             await asyncio.sleep(5)
             continue
 
@@ -645,17 +604,14 @@ Generate exactly {this_batch} questions now in JSON format:
             if not sessions.get(str(chat_id), {}).get("running"):
                 break
             try:
-                question_text = f"🎯 *{exam}* Quiz #{sent+1}/{total}\n\n{q['question']}"
-                options = q["options"]
-                correct_idx = int(q["correct"])
-                explanation = q.get("explanation", "")
-
+                question_text = f"🎯 [{exam}] Quiz #{sent+1}/{total}\n\n{q['question']}"
+                explanation   = q.get("explanation", "")
                 await context.bot.send_poll(
                     chat_id=chat_id,
                     question=question_text[:300],
-                    options=[o[:100] for o in options[:4]],
+                    options=[o[:100] for o in q["options"][:4]],
                     type=Poll.QUIZ,
-                    correct_option_id=correct_idx,
+                    correct_option_id=int(q["correct"]),
                     explanation=f"✅ {explanation}"[:200] if explanation else None,
                     open_period=30,
                     is_anonymous=False
@@ -665,18 +621,21 @@ Generate exactly {this_batch} questions now in JSON format:
                 save_sessions()
                 await asyncio.sleep(32)
             except Exception as e:
-                logger.error(f"Quiz send error (chat={chat_id}): {e}")
+                logger.error(f"Quiz send error | chat={chat_id} | error={e}")
                 await asyncio.sleep(5)
 
     sessions[str(chat_id)]["running"] = False
     save_sessions()
-    logger.info(f"Quiz session done: chat={chat_id} sent={sent}")
+    logger.info(f"Quiz session complete | chat={chat_id} | sent={sent}/{total}")
 
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
                 admin_id,
-                f"✅ Quiz session complete!\n📢 Chat: `{chat_id}`\n🧩 Sent: {sent}/{total}",
+                f"✅ *Quiz Session Complete!*\n\n"
+                f"📢 Chat: `{chat_id}`\n"
+                f"🧩 Sent: {sent}/{total}\n"
+                f"📚 Subject: {subject} | 🎯 {exam}",
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception:
@@ -696,29 +655,27 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN environment variable not set!")
+        raise ValueError("BOT_TOKEN is not set!")
     if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY environment variable not set!")
+        raise ValueError("GEMINI_API_KEY is not set!")
     if not ADMIN_IDS:
-        raise ValueError("ADMIN_IDS environment variable not set!")
+        raise ValueError("ADMIN_IDS is not set!")
 
     logger.info(f"Starting ALGO-BOT | Admins: {ADMIN_IDS}")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("algo-post", cmd_post))
-    app.add_handler(CommandHandler("algo-quizzes", cmd_quizzes))
-    app.add_handler(CommandHandler("algo-list", cmd_list))
-    app.add_handler(CommandHandler("algo-approve", cmd_approve))
-    app.add_handler(CommandHandler("algo-reject", cmd_reject))
-    app.add_handler(CommandHandler("algo-stop", cmd_stop))
-    app.add_handler(CommandHandler("algo-status", cmd_status))
+    app.add_handler(CommandHandler("start",        cmd_start))
+    app.add_handler(CommandHandler("algo_post",    cmd_post))
+    app.add_handler(CommandHandler("algo_quizzes", cmd_quizzes))
+    app.add_handler(CommandHandler("algo_list",    cmd_list))
+    app.add_handler(CommandHandler("algo_approve", cmd_approve))
+    app.add_handler(CommandHandler("algo_reject",  cmd_reject))
+    app.add_handler(CommandHandler("algo_stop",    cmd_stop))
+    app.add_handler(CommandHandler("algo_status",  cmd_status))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.ALL, fallback_handler))
-
-    from telegram.ext import ChatMemberHandler
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(MessageHandler(filters.ALL, fallback_handler))
 
     logger.info("Bot polling started...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
