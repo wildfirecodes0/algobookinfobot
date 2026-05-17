@@ -1,8 +1,3 @@
-"""
-ALGO-BOT - Govt Exam Preparation Telegram Bot
-Powered by Gemini AI
-"""
-
 import os
 import asyncio
 import logging
@@ -17,9 +12,6 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from google import genai
 
-# ─────────────────────────────────────────────
-# LOGGING
-# ─────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
@@ -30,9 +22,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 ADMIN_IDS_RAW  = os.getenv("ADMIN_IDS", "")
@@ -45,14 +34,7 @@ for _id in ADMIN_IDS_RAW.split(","):
     if _id.lstrip("-").isdigit():
         ADMIN_IDS.add(int(_id))
 
-# ─────────────────────────────────────────────
-# GEMINI SETUP
-# ─────────────────────────────────────────────
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
-# ─────────────────────────────────────────────
-# PERSISTENCE
-# ─────────────────────────────────────────────
 
 def load_json(path: str, default):
     try:
@@ -67,10 +49,6 @@ def save_json(path: str, data):
 
 approved_chats: dict = load_json(APPROVED_CHATS_FILE, {})
 sessions: dict = load_json(SESSION_FILE, {})
-
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -93,20 +71,12 @@ async def gemini_ask(prompt: str) -> str:
         logger.error(f"Gemini error: {e}")
         return ""
 
-# ─────────────────────────────────────────────
-# GUARD
-# ─────────────────────────────────────────────
-
 async def guard(update: Update) -> bool:
     chat = update.effective_chat
     user = update.effective_user
     if chat.type == "private":
         return is_admin(user.id)
     return str(chat.id) in approved_chats and approved_chats[str(chat.id)].get("approved")
-
-# ─────────────────────────────────────────────
-# CHAT MEMBER HANDLER
-# ─────────────────────────────────────────────
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.my_chat_member
@@ -146,10 +116,6 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             approved_chats.pop(key)
             save_approved()
 
-# ─────────────────────────────────────────────
-# /start
-# ─────────────────────────────────────────────
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
@@ -166,10 +132,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/algo_status` — View bot status",
         parse_mode=ParseMode.MARKDOWN
     )
-
-# ─────────────────────────────────────────────
-# /algo_approve  /algo_reject
-# ─────────────────────────────────────────────
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -199,10 +161,6 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"⚠️ Chat `{chat_id}` not found in list.", parse_mode=ParseMode.MARKDOWN)
 
-# ─────────────────────────────────────────────
-# /algo_list
-# ─────────────────────────────────────────────
-
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -221,10 +179,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
-# ─────────────────────────────────────────────
-# /algo_status
-# ─────────────────────────────────────────────
-
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -240,10 +194,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# ─────────────────────────────────────────────
-# /algo_stop
-# ─────────────────────────────────────────────
-
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -254,10 +204,6 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stopped += 1
     save_sessions()
     await update.message.reply_text(f"🛑 {stopped} session(s) have been stopped.")
-
-# ─────────────────────────────────────────────
-# DATA LISTS
-# ─────────────────────────────────────────────
 
 EXAMS = [
     "UPSC CSE", "SSC CGL", "SSC CHSL", "SSC MTS", "IBPS PO",
@@ -279,16 +225,11 @@ SUBJECTS_QUIZ = [
 
 LEVELS = ["Beginner", "Intermediate", "Advanced"]
 
-# ─────────────────────────────────────────────
-# /algo_post
-# ─────────────────────────────────────────────
-
 async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     context.user_data["flow"] = "post"
     context.user_data["target_chat"] = None
-
     approved_list = [(cid, info) for cid, info in approved_chats.items() if info.get("approved")]
     if not approved_list:
         await update.message.reply_text(
@@ -296,7 +237,6 @@ async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     kb = [[InlineKeyboardButton(
         f"{info['type'].upper()}: {info['title'][:30]}",
         callback_data=f"target|{cid}"
@@ -308,21 +248,15 @@ async def cmd_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN
     )
 
-# ─────────────────────────────────────────────
-# /algo_quizzes
-# ─────────────────────────────────────────────
-
 async def cmd_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     context.user_data["flow"] = "quiz"
     context.user_data["target_chat"] = None
-
     approved_list = [(cid, info) for cid, info in approved_chats.items() if info.get("approved")]
     if not approved_list:
         await update.message.reply_text("⚠️ No approved chats found.", parse_mode=ParseMode.MARKDOWN)
         return
-
     kb = [[InlineKeyboardButton(
         f"{info['type'].upper()}: {info['title'][:30]}",
         callback_data=f"target|{cid}"
@@ -333,10 +267,6 @@ async def cmd_quizzes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
     )
-
-# ─────────────────────────────────────────────
-# CALLBACK HANDLER
-# ─────────────────────────────────────────────
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -380,7 +310,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["level"] = data.split("|", 1)[1]
         if flow == "post":
             kb = [
-                [InlineKeyboardButton("5 Posts", callback_data="count|5"),
+                [InlineKeyboardButton("5 Posts",  callback_data="count|5"),
                  InlineKeyboardButton("10 Posts", callback_data="count|10")],
                 [InlineKeyboardButton("15 Posts", callback_data="count|15"),
                  InlineKeyboardButton("20 Posts", callback_data="count|20")],
@@ -392,9 +322,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             kb = [
-                [InlineKeyboardButton("25 Quizzes", callback_data="count|25"),
-                 InlineKeyboardButton("50 Quizzes", callback_data="count|50")],
-                [InlineKeyboardButton("75 Quizzes", callback_data="count|75"),
+                [InlineKeyboardButton("25 Quizzes",  callback_data="count|25"),
+                 InlineKeyboardButton("50 Quizzes",  callback_data="count|50")],
+                [InlineKeyboardButton("75 Quizzes",  callback_data="count|75"),
                  InlineKeyboardButton("100 Quizzes", callback_data="count|100")],
                 [InlineKeyboardButton("150 Quizzes", callback_data="count|150"),
                  InlineKeyboardButton("200 Quizzes", callback_data="count|200")],
@@ -407,15 +337,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("count|"):
         context.user_data["count"] = int(data.split("|", 1)[1])
-        subject = context.user_data["subject"]
-        exam    = context.user_data["exam"]
-        level   = context.user_data["level"]
-        count   = context.user_data["count"]
-        target  = context.user_data["target_chat"]
+        subject    = context.user_data["subject"]
+        exam       = context.user_data["exam"]
+        level      = context.user_data["level"]
+        count      = context.user_data["count"]
+        target     = context.user_data["target_chat"]
         mode_label = "Study Material Posts" if flow == "post" else "Quizzes"
         kb = [
             [InlineKeyboardButton("✅ Yes, Start!", callback_data="confirm|yes")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="confirm|no")],
+            [InlineKeyboardButton("❌ Cancel",      callback_data="confirm|no")],
         ]
         await query.edit_message_text(
             f"📋 *Confirm Session:*\n\n"
@@ -443,7 +373,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target  = context.user_data["target_chat"]
 
         await query.edit_message_text(
-            f"🚀 *Session Started!*\n"
+            f"🚀 *Session Started!*\n\n"
             f"📚 {subject} | 🎯 {exam} | 📊 {level} | 🔢 {count}",
             parse_mode=ParseMode.MARKDOWN
         )
@@ -467,10 +397,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(run_quiz_session(context, int(cid), subject, exam, level, count))
 
         context.user_data.clear()
-
-# ─────────────────────────────────────────────
-# STUDY MATERIAL SESSION
-# ─────────────────────────────────────────────
 
 async def run_study_session(context, chat_id: int, subject: str, exam: str, level: str, total: int):
     logger.info(f"Study session started | chat={chat_id} | subject={subject} | exam={exam} | level={level} | total={total}")
@@ -549,10 +475,6 @@ Generate {this_batch} posts now:
             )
         except Exception:
             pass
-
-# ─────────────────────────────────────────────
-# QUIZ SESSION
-# ─────────────────────────────────────────────
 
 async def run_quiz_session(context, chat_id: int, subject: str, exam: str, level: str, total: int):
     logger.info(f"Quiz session started | chat={chat_id} | subject={subject} | exam={exam} | level={level} | total={total}")
@@ -641,19 +563,11 @@ Generate exactly {this_batch} questions:
         except Exception:
             pass
 
-# ─────────────────────────────────────────────
-# FALLBACK
-# ─────────────────────────────────────────────
-
 async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-
-def main():
+async def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN is not set!")
     if not GEMINI_API_KEY:
@@ -678,7 +592,4 @@ def main():
     app.add_handler(MessageHandler(filters.ALL, fallback_handler))
 
     logger.info("Bot polling started...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+    await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
