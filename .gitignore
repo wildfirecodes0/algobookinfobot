@@ -1,0 +1,6 @@
+.env
+*.log
+approved_chats.json
+sessions.json
+__pycache__/
+*.pyc
